@@ -48,6 +48,24 @@ GUI の使い方:
 - 結果から選択して `Add selected to Stations` で `stations.json` に追加できます
 - `Play` / `Stop` / 音量スライダーで再生を操作します
 
+## Pro 機能
+
+### ★ お気に入り (Favorites)
+- 局を選択して **☆ Fav** ボタンを押すと、お気に入り（★）に登録・解除できます。
+- 一覧上部の **★ Favorites only** チェックボックスをオンにすると、お気に入り登録済みの局だけを表示します。
+- お気に入りフラグは `stations.json` に保存されます。
+
+### 🎵 Now Playing（現在再生中情報）
+- 再生中、画面下部の **Now Playing** 欄にストリームの ICY メタデータ（曲名・番組名）が自動表示されます。
+- 5 秒ごとに更新されます。
+
+### ⌨️ キーボードショートカット
+| キー | 動作 |
+|---|---|
+| `Space` / `Enter` | 選択中の局を再生 |
+| `Escape` | 停止 |
+| `Ctrl+F` | 検索欄にフォーカス |
+
 ## stations.json
 - 個人の局リストは `stations.json` に保存されます。公開リポジトリに個人のストリームURLを載せたくない場合は `stations.example.json` を参考にして手元で `stations.json` を作成してください。
 
