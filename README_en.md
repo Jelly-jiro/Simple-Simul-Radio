@@ -48,6 +48,24 @@ Usage:
 - Select a result and press `Add selected to Stations` to save it to `stations.json`
 - Use `Play` / `Stop` and the volume slider to control playback
 
+## Pro Features
+
+### ★ Favorites
+- Select a station and press **☆ Fav** to toggle it as a favorite (★).
+- Check **★ Favorites only** at the top of the station list to show only favorited stations.
+- The favorite flag is persisted in `stations.json`.
+
+### 🎵 Now Playing
+- While a stream is playing, the **Now Playing** label at the bottom of the window automatically shows the ICY stream metadata (song title / programme name).
+- Updated every 5 seconds.
+
+### ⌨️ Keyboard Shortcuts
+| Key | Action |
+|---|---|
+| `Space` / `Enter` | Play selected station |
+| `Escape` | Stop playback |
+| `Ctrl+F` | Focus the search box |
+
 ## stations.json
 - User station lists are stored in `stations.json`. If you don't want to publish your personal stream URLs, use `stations.example.json` as a template and create a local `stations.json`.
 
@@ -57,6 +75,3 @@ Usage:
 
 ## License
 This project is released under the MIT License (`LICENSE`).
-
----
-If you'd like further improvements to the README (screenshots, more examples, or CI instructions), tell me and I will add them.

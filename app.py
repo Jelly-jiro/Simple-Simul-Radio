@@ -3,6 +3,11 @@
 
 Rewritten to avoid PySimpleGUI compatibility issues on some systems.
 Uses Tkinter for the GUI (stdlib) and python-vlc for playback.
+
+Pro features:
+  - Now Playing metadata display (polls VLC ICY/stream metadata)
+  - Favorites system (star toggle + filter)
+  - Keyboard shortcuts (Space/Enter=Play, Escape=Stop, Ctrl+F=Search)
 """
 import json
 import os
@@ -135,17 +140,39 @@ class RadioPlayer:
         except Exception:
             pass
 
+    def get_now_playing(self) -> str:
+        """Return the current track/song title from stream metadata, or empty string."""
+        try:
+            media = self.player.get_media()
+            if media is None:
+                return ""
+            # NowPlaying carries ICY stream title (artist - song)
+            now_playing = media.get_meta(vlc.Meta.NowPlaying)
+            if now_playing:
+                return now_playing
+            title = media.get_meta(vlc.Meta.Title)
+            if title:
+                return title
+        except Exception:
+            pass
+        return ""
+
 
 class RadioApp(tk.Tk):
     def __init__(self, stations):
         super().__init__()
         self.title("Simple Radio")
-        self.geometry("600x360")
+        self.geometry("600x420")
         self.stations = stations
         self.player = RadioPlayer()
         self._search_results = []
+        self._show_favorites_only = tk.BooleanVar(value=False)
+        # Indices of stations currently shown in the listbox (subset when filtering)
+        self._visible_indices: list[int] = []
 
         self._build_ui()
+        self._bind_shortcuts()
+        self._schedule_metadata_poll()
 
     def _build_ui(self):
         frm = ttk.Frame(self, padding=10)
@@ -168,7 +195,17 @@ class RadioApp(tk.Tk):
         self.search_btn = ttk.Button(search_frame, text="Search", command=self.on_search)
         self.search_btn.pack(side=tk.LEFT)
 
-        ttk.Label(frm, text="Stations").pack(anchor=tk.W)
+        # Stations header with "Favorites only" filter
+        stations_header = ttk.Frame(frm)
+        stations_header.pack(fill=tk.X)
+        ttk.Label(stations_header, text="Stations").pack(side=tk.LEFT, anchor=tk.W)
+        self.favorites_filter_cb = ttk.Checkbutton(
+            stations_header, text="★ Favorites only",
+            variable=self._show_favorites_only,
+            command=self._refresh_listbox,
+        )
+        self.favorites_filter_cb.pack(side=tk.RIGHT)
+
         list_frame = ttk.Frame(frm)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -178,13 +215,11 @@ class RadioApp(tk.Tk):
         self.station_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
         self.station_scroll.pack(side=tk.LEFT, fill=tk.Y)
         self.listbox.config(yscrollcommand=self.station_scroll.set)
-        for s in self.stations:
-            name = s.get("name", "(no name)")
-            info = s.get("info", "")
-            self.listbox.insert(tk.END, f"{name} - {info}")
 
         btn_frame = ttk.Frame(list_frame)
         btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(8, 0))
+        self.fav_btn = ttk.Button(btn_frame, text="☆ Fav", width=12, command=self.on_toggle_favorite)
+        self.fav_btn.pack(pady=(0, 6))
         self.add_btn = ttk.Button(btn_frame, text="Add", width=12, command=self.on_add)
         self.add_btn.pack(pady=(0, 6))
         self.edit_btn = ttk.Button(btn_frame, text="Edit", width=12, command=self.on_edit)
@@ -193,6 +228,9 @@ class RadioApp(tk.Tk):
         self.delete_btn.pack(pady=(0, 6))
         self.save_btn = ttk.Button(btn_frame, text="Save", width=12, command=self.on_save)
         self.save_btn.pack(pady=(6, 0))
+
+        # Populate listbox
+        self._refresh_listbox()
 
         # Search results
         results_frame = ttk.Frame(frm)
@@ -227,7 +265,14 @@ class RadioApp(tk.Tk):
         self.status_var = tk.StringVar(value="Stopped")
         ttk.Label(status_frm, textvariable=self.status_var).pack(side=tk.LEFT)
 
-        tip = ttk.Label(frm, text="Tip: Edit stations.json to add/remove stations.")
+        # Now Playing display
+        now_playing_frm = ttk.Frame(frm)
+        now_playing_frm.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(now_playing_frm, text="Now Playing:").pack(side=tk.LEFT)
+        self.now_playing_var = tk.StringVar(value="")
+        ttk.Label(now_playing_frm, textvariable=self.now_playing_var, foreground="#0066cc").pack(side=tk.LEFT, padx=(4, 0))
+
+        tip = ttk.Label(frm, text="Shortcuts: Space/Enter=Play  Esc=Stop  Ctrl+F=Search")
         tip.pack(anchor=tk.W, pady=(6, 0))
 
     def on_play(self):
@@ -235,13 +280,19 @@ class RadioApp(tk.Tk):
         if not sel:
             messagebox.showinfo("Select station", "Please select a station first.")
             return
-        idx = sel[0]
+        lb_idx = sel[0]
+        # Map listbox position back to the actual station index
+        if lb_idx < len(self._visible_indices):
+            idx = self._visible_indices[lb_idx]
+        else:
+            return
         url = self.stations[idx].get("url")
         if not url:
             messagebox.showinfo("No URL", "Station has no URL configured.")
             return
 
         self.status_var.set("Connecting...")
+        self.now_playing_var.set("")
         t = threading.Thread(target=self._play_thread, args=(url,), daemon=True)
         t.start()
 
@@ -253,6 +304,7 @@ class RadioApp(tk.Tk):
     def on_stop(self):
         self.player.stop()
         self.status_var.set("Stopped")
+        self.now_playing_var.set("")
 
     def on_volume(self, v):
         try:
@@ -270,7 +322,11 @@ class RadioApp(tk.Tk):
         if not sel:
             messagebox.showinfo("Edit station", "Please select a station first.")
             return
-        idx = sel[0]
+        lb_idx = sel[0]
+        if lb_idx < len(self._visible_indices):
+            idx = self._visible_indices[lb_idx]
+        else:
+            return
         self._open_station_editor(index=idx)
 
     def on_delete(self):
@@ -278,15 +334,20 @@ class RadioApp(tk.Tk):
         if not sel:
             messagebox.showinfo("Delete station", "Please select a station first.")
             return
-        idx = sel[0]
+        lb_idx = sel[0]
+        if lb_idx < len(self._visible_indices):
+            idx = self._visible_indices[lb_idx]
+        else:
+            return
         name = self.stations[idx].get("name", "(no name)")
         if messagebox.askyesno("Delete", f"Delete station '{name}'?"):
             # stop if currently playing this
             if self.player.current_url == self.stations[idx].get("url"):
                 self.player.stop()
                 self.status_var.set("Stopped")
+                self.now_playing_var.set("")
             del self.stations[idx]
-            self.listbox.delete(idx)
+            self._refresh_listbox()
             self.save_stations()
 
     def on_save(self):
@@ -333,14 +394,14 @@ class RadioApp(tk.Tk):
             if not name or not url:
                 messagebox.showinfo("Validation", "Name and URL are required.")
                 return
-            entry = {"name": name, "info": info, "url": url}
+            # Preserve existing favorite flag when editing
+            favorite = self.stations[index].get("favorite", False) if index is not None else False
+            entry = {"name": name, "info": info, "url": url, "favorite": favorite}
             if index is None:
                 self.stations.append(entry)
-                self.listbox.insert(tk.END, f"{name} - {info}")
             else:
                 self.stations[index] = entry
-                self.listbox.delete(index)
-                self.listbox.insert(index, f"{name} - {info}")
+            self._refresh_listbox()
             self.save_stations()
             win.destroy()
 
@@ -443,7 +504,7 @@ class RadioApp(tk.Tk):
                     try:
                         print(f"[debug] _finish: adding entry name={entry.get('name')} url={entry.get('url')}")
                         self.stations.append(entry)
-                        self.listbox.insert(tk.END, f"{entry['name']} - {entry['info']}")
+                        self._refresh_listbox()
                         self.save_stations()
                         print("[debug] _finish: save_stations done")
                         try:
@@ -490,6 +551,76 @@ class RadioApp(tk.Tk):
 
         t = threading.Thread(target=_add_search_thread, args=(item, url), daemon=True)
         t.start()
+
+    # ------------------------------------------------------------------ #
+    # Helpers: listbox refresh, favorites, keyboard shortcuts, metadata   #
+    # ------------------------------------------------------------------ #
+
+    def _listbox_label(self, s: dict) -> str:
+        star = "★ " if s.get("favorite") else ""
+        name = s.get("name", "(no name)")
+        info = s.get("info", "")
+        return f"{star}{name} - {info}"
+
+    def _refresh_listbox(self):
+        """Rebuild the listbox according to the current filter setting."""
+        self.listbox.delete(0, tk.END)
+        self._visible_indices = []
+        for i, s in enumerate(self.stations):
+            if self._show_favorites_only.get() and not s.get("favorite"):
+                continue
+            self._visible_indices.append(i)
+            self.listbox.insert(tk.END, self._listbox_label(s))
+
+    def on_toggle_favorite(self):
+        """Toggle the favorite flag on the selected station."""
+        sel = self.listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Favorites", "Please select a station first.")
+            return
+        lb_idx = sel[0]
+        if lb_idx >= len(self._visible_indices):
+            return
+        idx = self._visible_indices[lb_idx]
+        station = self.stations[idx]
+        station["favorite"] = not station.get("favorite", False)
+        self._refresh_listbox()
+        # Update button label to reflect new state
+        self.save_stations()
+        # Re-select the same logical station if still visible
+        for new_lb_idx, vis_idx in enumerate(self._visible_indices):
+            if vis_idx == idx:
+                self.listbox.selection_set(new_lb_idx)
+                self.listbox.see(new_lb_idx)
+                break
+
+    def _bind_shortcuts(self):
+        """Bind keyboard shortcuts to common actions."""
+        self.bind("<space>", lambda e: self.on_play())
+        self.bind("<Return>", lambda e: self.on_play())
+        self.bind("<Escape>", lambda e: self.on_stop())
+        self.bind("<Control-f>", lambda e: (self.search_entry.focus_set(), "break"))
+        self.bind("<Control-F>", lambda e: (self.search_entry.focus_set(), "break"))
+
+    def destroy(self):
+        """Cancel the metadata polling callback before destroying the window."""
+        try:
+            self.after_cancel(self._metadata_poll_id)
+        except Exception:
+            pass
+        super().destroy()
+
+    def _schedule_metadata_poll(self):
+        """Poll VLC for stream metadata (Now Playing) every 5 seconds."""
+        try:
+            if self.player.playing:
+                info = self.player.get_now_playing()
+                if info:
+                    self.now_playing_var.set(info)
+            self._metadata_poll_id = self.after(5000, self._schedule_metadata_poll)
+        except tk.TclError:
+            # Window has been destroyed; stop polling silently.
+            pass
 
 
 def main():
