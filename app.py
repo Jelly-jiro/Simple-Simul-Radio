@@ -5,6 +5,7 @@ Rewritten to avoid PySimpleGUI compatibility issues on some systems.
 Uses Tkinter for the GUI (stdlib) and python-vlc for playback.
 """
 import json
+import math
 import os
 import sys
 import threading
@@ -23,6 +24,23 @@ except Exception as e:
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIONS_FILE = os.path.join(APP_DIR, "stations.json")
+
+# ── Aurora theme palette ──────────────────────────────────────────────────────
+AURORA_BG       = "#05050f"   # near-black dark-blue background
+AURORA_FG       = "#cce8ff"   # cool white text
+AURORA_ENTRY_BG = "#0a0a20"   # slightly lighter for input fields
+AURORA_SELECT   = "#1a4060"   # list selection highlight
+AURORA_ACCENT   = "#38bdf8"   # sky-blue accent
+
+# RGB tuples for the aurora animated glow bands
+_AURORA_BANDS = [
+    (  0, 230, 140),   # mint teal
+    (  0, 140, 255),   # sky blue
+    (110,   0, 255),   # violet
+    (  0, 220,  90),   # spring green
+    (180,   0, 255),   # purple
+]
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def load_stations(path):
@@ -139,15 +157,73 @@ class RadioPlayer:
 class RadioApp(tk.Tk):
     def __init__(self, stations):
         super().__init__()
-        self.title("Simple Radio")
-        self.geometry("600x360")
+        self.title("Simple Radio  ✦  Aurora")
+        self.geometry("600x440")
+        self.configure(bg=AURORA_BG)
         self.stations = stations
         self.player = RadioPlayer()
         self._search_results = []
+        self._aurora_t = 0.0
 
+        self._setup_style()
         self._build_ui()
+        self._animate_aurora()
+
+    def _setup_style(self):
+        """Configure ttk styles for the dark aurora theme."""
+        style = ttk.Style(self)
+        style.theme_use("clam")
+
+        style.configure(".",
+                        background=AURORA_BG,
+                        foreground=AURORA_FG,
+                        bordercolor="#1a3a5a",
+                        lightcolor="#0a1a2a",
+                        darkcolor="#020208",
+                        troughcolor=AURORA_ENTRY_BG,
+                        focuscolor=AURORA_ACCENT)
+        style.configure("TFrame",  background=AURORA_BG)
+        style.configure("TLabel",  background=AURORA_BG, foreground=AURORA_FG)
+        style.configure("TButton",
+                        background="#0b1e30",
+                        foreground=AURORA_FG,
+                        padding=(8, 4),
+                        bordercolor="#1a3a5a",
+                        lightcolor="#1a3a5a",
+                        darkcolor="#030308",
+                        relief="flat")
+        style.map("TButton",
+                  background=[("active", "#1a3a5a"), ("disabled", "#050510")],
+                  foreground=[("disabled", "#405060")])
+        style.configure("TEntry",
+                        fieldbackground=AURORA_ENTRY_BG,
+                        foreground=AURORA_FG,
+                        insertcolor=AURORA_FG,
+                        bordercolor="#1a3a5a")
+        style.configure("TCombobox",
+                        fieldbackground=AURORA_ENTRY_BG,
+                        foreground=AURORA_FG,
+                        background="#0b1e30",
+                        arrowcolor=AURORA_ACCENT)
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", AURORA_ENTRY_BG)],
+                  foreground=[("readonly", AURORA_FG)],
+                  background=[("readonly", "#0b1e30")])
+        style.configure("Vertical.TScrollbar",
+                        background="#0b1e30",
+                        troughcolor=AURORA_BG,
+                        arrowcolor=AURORA_ACCENT,
+                        bordercolor=AURORA_BG)
+        style.configure("TScale",
+                        background=AURORA_BG,
+                        troughcolor="#0b1e30",
+                        sliderthickness=12)
 
     def _build_ui(self):
+        # Aurora animated banner at the top of the window
+        self._aurora_canvas = tk.Canvas(self, height=75, bg=AURORA_BG, highlightthickness=0)
+        self._aurora_canvas.pack(fill=tk.X)
+
         frm = ttk.Frame(self, padding=10)
         frm.pack(fill=tk.BOTH, expand=True)
 
@@ -172,7 +248,11 @@ class RadioApp(tk.Tk):
         list_frame = ttk.Frame(frm)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.listbox = tk.Listbox(list_frame, height=12)
+        self.listbox = tk.Listbox(list_frame, height=12,
+                                  bg=AURORA_ENTRY_BG, fg=AURORA_FG,
+                                  selectbackground=AURORA_SELECT, selectforeground="#ffffff",
+                                  relief=tk.FLAT, highlightthickness=1,
+                                  highlightcolor="#1a3a5a", highlightbackground=AURORA_BG)
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         # vertical scrollbar for stations listbox
         self.station_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
@@ -199,7 +279,11 @@ class RadioApp(tk.Tk):
         results_frame.pack(fill=tk.BOTH, expand=False, pady=(8, 0))
         ttk.Label(results_frame, text="Search results:").pack(anchor=tk.W)
         # results listbox with scrollbar
-        self.results_listbox = tk.Listbox(results_frame, height=6)
+        self.results_listbox = tk.Listbox(results_frame, height=6,
+                                          bg=AURORA_ENTRY_BG, fg=AURORA_FG,
+                                          selectbackground=AURORA_SELECT, selectforeground="#ffffff",
+                                          relief=tk.FLAT, highlightthickness=1,
+                                          highlightcolor="#1a3a5a", highlightbackground=AURORA_BG)
         self.results_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.results_scroll = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_listbox.yview)
         self.results_scroll.pack(side=tk.LEFT, fill=tk.Y)
@@ -229,6 +313,53 @@ class RadioApp(tk.Tk):
 
         tip = ttk.Label(frm, text="Tip: Edit stations.json to add/remove stations.")
         tip.pack(anchor=tk.W, pady=(6, 0))
+
+    def _animate_aurora(self):
+        """Draw one frame of the aurora animation and schedule the next."""
+        self._aurora_t += 0.018
+        t = self._aurora_t
+        canvas = self._aurora_canvas
+        w = canvas.winfo_width() or 600
+        h = canvas.winfo_height() or 75
+
+        canvas.delete("aurora")
+        # Dark background fill
+        canvas.create_rectangle(0, 0, w, h, fill=AURORA_BG, outline="", tags="aurora")
+
+        # Draw each aurora band as layered horizontal glow ellipses
+        for i, (r0, g0, b0) in enumerate(_AURORA_BANDS):
+            phase = t + i * 1.26
+            # Vertical centre drifts sinusoidally
+            cy = h * (0.5 + 0.30 * math.sin(phase * 0.75 + i * 0.4))
+            # Horizontal centre shifts slightly
+            cx = w * (0.50 + 0.12 * math.sin(phase * 0.55 + i * 0.9))
+
+            num_layers = 10
+            for layer in range(num_layers, 0, -1):
+                f = layer / num_layers
+                alpha = f ** 1.8 * 0.62
+                # Blend aurora colour with the dark background
+                bg_r, bg_g, bg_b = (int(AURORA_BG[1:3], 16),
+                                    int(AURORA_BG[3:5], 16),
+                                    int(AURORA_BG[5:7], 16))
+                lr = int(bg_r + (r0 - bg_r) * alpha)
+                lg = int(bg_g + (g0 - bg_g) * alpha)
+                lb = int(bg_b + (b0 - bg_b) * alpha)
+                color = (f"#{max(0, min(255, lr)):02x}"
+                         f"{max(0, min(255, lg)):02x}"
+                         f"{max(0, min(255, lb)):02x}")
+                # Wide horizontal ellipse, narrow vertically
+                rx = w * (0.38 + 0.08 * math.sin(phase + layer * 0.4)) * f
+                ry = h * 0.45 * f
+                canvas.create_oval(cx - rx, cy - ry, cx + rx, cy + ry,
+                                   fill=color, outline="", tags="aurora")
+
+        # Title text drawn on top of the glow
+        canvas.create_text(w // 2, h // 2, text="✦  Simple Radio  ✦",
+                           fill=AURORA_FG, font=("Helvetica", 14, "bold"),
+                           tags="aurora")
+
+        self.after(50, self._animate_aurora)
 
     def on_play(self):
         sel = self.listbox.curselection()
@@ -305,6 +436,7 @@ class RadioApp(tk.Tk):
         win = tk.Toplevel(self)
         win.title("Station")
         win.geometry("480x200")
+        win.configure(bg=AURORA_BG)
         frm = ttk.Frame(win, padding=10)
         frm.pack(fill=tk.BOTH, expand=True)
 
